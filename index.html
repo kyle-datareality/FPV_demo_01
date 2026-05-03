@@ -20,6 +20,12 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh}
 #fsBg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(24px) brightness(.55);transform:scale(1.08)}
 #fsImg{position:relative;max-width:78vw;max-height:88vh;box-shadow:0 30px 80px rgba(0,0,0,.75),0 0 0 1px rgba(255,255,255,.08);border-radius:2px}
 #fsHint{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.55);font:10px 'Courier New',monospace;letter-spacing:.25em;text-transform:uppercase}
+#mobileUI{position:fixed;inset:0;z-index:5;pointer-events:none;display:none}
+#mobileUI.show{display:block}
+#joystick{position:absolute;left:24px;bottom:24px;width:130px;height:130px;border-radius:50%;background:rgba(255,255,255,.10);border:2px solid rgba(255,255,255,.30);pointer-events:auto;touch-action:none;backdrop-filter:blur(4px)}
+#joyKnob{position:absolute;left:50%;top:50%;width:54px;height:54px;border-radius:50%;background:rgba(255,255,255,.55);transform:translate(-50%,-50%);box-shadow:0 0 12px rgba(0,0,0,.4)}
+#gyroBtn{position:absolute;right:18px;top:18px;background:rgba(0,0,0,.55);color:#39FF14;border:1px solid rgba(57,255,20,.55);padding:10px 14px;font:11px 'Courier New',monospace;letter-spacing:.25em;text-transform:uppercase;pointer-events:auto;border-radius:3px}
+#gyroBtn.on{background:rgba(0,40,0,.7);color:#fff;border-color:#39FF14}
 </style>
 </head>
 <body>
@@ -30,6 +36,7 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh}
 <canvas id="c3"></canvas>
 <canvas id="hud"></canvas>
 <div id="fsView"><div id="fsBg"></div><img id="fsImg" alt=""><div id="fsHint">Click or ESC to return</div></div>
+<div id="mobileUI"><div id="joystick"><div id="joyKnob"></div></div><button id="gyroBtn">Gyro: OFF</button></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -207,6 +214,8 @@ document.addEventListener('keydown',e=>{keys[e.code]=true;});
 document.addEventListener('keyup',e=>{keys[e.code]=false;});
 let tYaw=0,tPitch=0,cYaw=0,cPitch=0;
 const MAX_P=Math.PI*.42;
+// Yaw/pitch radians per full screen-width/height of pointer travel (DPI-independent)
+const YAW_PER_W=Math.PI*2.0,PITCH_PER_H=Math.PI*1.2;
 let locked=false,fsOpen=false,hov=null;
 const fsView=document.getElementById('fsView');
 const fsBg=document.getElementById('fsBg');
@@ -228,7 +237,12 @@ function closeFullscreen(){
   try{c3.requestPointerLock();}catch(e){}
 }
 fsView.addEventListener('click',closeFullscreen);
-ovEl.addEventListener('click',()=>{if(!fsOpen)c3.requestPointerLock();});
+const isTouch='ontouchstart' in window||navigator.maxTouchPoints>0;
+ovEl.addEventListener('click',()=>{
+  if(fsOpen)return;
+  if(isTouch){ovEl.style.display='none';locked=true;}
+  else c3.requestPointerLock();
+});
 c3.addEventListener('click',()=>{if(locked&&hov)openFullscreen(hov);});
 document.addEventListener('pointerlockchange',()=>{
   locked=document.pointerLockElement===c3;
@@ -236,7 +250,7 @@ document.addEventListener('pointerlockchange',()=>{
 });
 document.addEventListener('mousemove',e=>{
   if(!locked||fsOpen)return;
-  tYaw-=e.movementX*.0060;tPitch-=e.movementY*.0060;
+  tYaw-=(e.movementX/window.innerWidth)*YAW_PER_W;tPitch-=(e.movementY/window.innerHeight)*PITCH_PER_H;
   tPitch=Math.max(-MAX_P,Math.min(MAX_P,tPitch));
 });
 document.addEventListener('keydown',e=>{
@@ -244,6 +258,77 @@ document.addEventListener('keydown',e=>{
     if(fsOpen)closeFullscreen();
     else if(document.pointerLockElement)document.exitPointerLock();
   }
+});
+
+// ═══ Mobile / Touch Controls ═══════════════════════════
+const mobileUI=document.getElementById('mobileUI');
+const joy=document.getElementById('joystick');
+const knob=document.getElementById('joyKnob');
+const gyroBtn=document.getElementById('gyroBtn');
+const joyVec={x:0,y:0};
+let joyId=-1,lookId=-1,lookLastX=0,lookLastY=0;
+let gyroEnabled=false,gyroQ0=null;
+if(isTouch)mobileUI.classList.add('show');
+function joyUpdate(t){
+  const r=joy.getBoundingClientRect();
+  const cx=r.left+r.width/2,cy=r.top+r.height/2;
+  const max=r.width/2-20;
+  let dx=t.clientX-cx,dy=t.clientY-cy;
+  const len=Math.hypot(dx,dy);
+  if(len>max){dx=dx/len*max;dy=dy/len*max;}
+  knob.style.transform=`translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  joyVec.x=dx/max;joyVec.y=dy/max;
+}
+function joyReset(){
+  knob.style.transform='translate(-50%,-50%)';
+  joyVec.x=0;joyVec.y=0;joyId=-1;
+}
+joy.addEventListener('touchstart',e=>{e.preventDefault();const t=e.changedTouches[0];joyId=t.identifier;joyUpdate(t);},{passive:false});
+joy.addEventListener('touchmove',e=>{e.preventDefault();for(const t of e.changedTouches)if(t.identifier===joyId)joyUpdate(t);},{passive:false});
+joy.addEventListener('touchend',e=>{e.preventDefault();for(const t of e.changedTouches)if(t.identifier===joyId)joyReset();},{passive:false});
+joy.addEventListener('touchcancel',e=>{e.preventDefault();joyReset();},{passive:false});
+// Touch drag on canvas → look (active when gyro is off)
+c3.addEventListener('touchstart',e=>{
+  if(fsOpen||gyroEnabled)return;
+  for(const t of e.changedTouches){
+    if(lookId===-1){lookId=t.identifier;lookLastX=t.clientX;lookLastY=t.clientY;}
+  }
+},{passive:true});
+c3.addEventListener('touchmove',e=>{
+  if(fsOpen||gyroEnabled)return;
+  for(const t of e.changedTouches){
+    if(t.identifier===lookId){
+      tYaw-=((t.clientX-lookLastX)/window.innerWidth)*YAW_PER_W;
+      tPitch-=((t.clientY-lookLastY)/window.innerHeight)*PITCH_PER_H;
+      tPitch=Math.max(-MAX_P,Math.min(MAX_P,tPitch));
+      lookLastX=t.clientX;lookLastY=t.clientY;
+    }
+  }
+},{passive:true});
+c3.addEventListener('touchend',e=>{for(const t of e.changedTouches)if(t.identifier===lookId)lookId=-1;},{passive:true});
+c3.addEventListener('touchcancel',()=>{lookId=-1;},{passive:true});
+// Gyroscope / device orientation
+gyroBtn.addEventListener('click',async()=>{
+  if(!gyroEnabled){
+    if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
+      try{const r=await DeviceOrientationEvent.requestPermission();if(r!=='granted'){gyroBtn.textContent='Gyro: DENIED';return;}}
+      catch(err){gyroBtn.textContent='Gyro: ERR';return;}
+    }
+    gyroEnabled=true;gyroQ0=null;
+    gyroBtn.textContent='Gyro: ON';gyroBtn.classList.add('on');
+  }else{
+    gyroEnabled=false;
+    gyroBtn.textContent='Gyro: OFF';gyroBtn.classList.remove('on');
+  }
+});
+window.addEventListener('deviceorientation',e=>{
+  if(!gyroEnabled||fsOpen)return;
+  if(e.alpha===null||e.beta===null)return;
+  if(gyroQ0===null){gyroQ0={a:e.alpha,b:e.beta};return;}
+  const da=(e.alpha-gyroQ0.a)*Math.PI/180;
+  const db=(e.beta-gyroQ0.b)*Math.PI/180;
+  tYaw=-da;
+  tPitch=Math.max(-MAX_P,Math.min(MAX_P,db));
 });
 
 // ═══ Player State ══════════════════════════════════════
@@ -537,6 +622,7 @@ function animate(){
     if(keys['KeyS']||keys['ArrowDown'])mv.addScaledVector(fwd,-1);
     if(keys['KeyA']||keys['ArrowLeft'])mv.addScaledVector(right,-1);
     if(keys['KeyD']||keys['ArrowRight'])mv.addScaledVector(right,1);
+    if(joyVec.x||joyVec.y){mv.addScaledVector(fwd,-joyVec.y);mv.addScaledVector(right,joyVec.x);}
   }
   const hasInput=mv.lengthSq()>.001;
   if(hasInput){mv.normalize();targetVel.copy(mv).multiplyScalar(WALK_SPEED);}
