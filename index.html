@@ -146,7 +146,7 @@ const mBorder=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.5});
 
 // Poster mats — unlit, no tone mapping so source colors render verbatim
 function mkPMat(tex){
-  return new THREE.MeshBasicMaterial({map:tex,toneMapped:false});
+  return new THREE.MeshBasicMaterial({map:tex,toneMapped:false,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-4});
 }
 const PM=[mkPMat(T.h),mkPMat(T.d),mkPMat(T.l),mkPMat(T.m),mkPMat(T.f)];
 
@@ -178,14 +178,15 @@ box(bt,.1,ROOM_D,mBorder, ROOM_W/2,.05,0);
 const POSTERS=[];
 function addPoster(cx,cy,cz,ry,mi){
   const pw=2.4,ph=3.2,brd=.06;
-  const fr=new THREE.Mesh(new THREE.BoxGeometry(pw+brd*2,ph+brd*2,.04),mBorder);
+  const frMat=mBorder.clone();
+  const fr=new THREE.Mesh(new THREE.BoxGeometry(pw+brd*2,ph+brd*2,.04),frMat);
   fr.position.set(cx,cy,cz);fr.rotation.y=ry;scene.add(fr);
   const mat=PM[mi];
   const p=new THREE.Mesh(new THREE.PlaneGeometry(pw,ph),mat);
   const off=.025;
   p.position.set(cx+Math.sin(ry)*off,cy,cz+Math.cos(ry)*off);
   p.rotation.y=ry;scene.add(p);
-  POSTERS.push({mat,cx,cy,cz,fd:new THREE.Vector3(Math.sin(ry),0,Math.cos(ry)).normalize()});
+  POSTERS.push({mat,frMat,cx,cy,cz,fd:new THREE.Vector3(Math.sin(ry),0,Math.cos(ry)).normalize()});
 }
 addPoster(-6,2.1,-ROOM_D/2+.06,0,0);
 addPoster( 0,2.1,-ROOM_D/2+.06,0,1);
@@ -380,6 +381,8 @@ const lerp=(a,b,t)=>a+(b-a)*t;
 // ═══ HUD Drawing ═══════════════════════════════════════
 const G='#39FF14',DG='rgba(0,180,0,.8)',RED='#FF2200',YEL='#FFD700';
 let hudT=0;
+let twHov=null,twLen=0,twT=0;
+const TW_LABEL='TAP FOR FULLSCREEN';
 
 // Sensor values that update slowly
 const SENSOR_BASE=[0,9,0,0,50,0,0,0,0,0];
@@ -620,6 +623,27 @@ function drawScanLine(ctx,W,H){
   ctx.fillStyle=gr;ctx.fillRect(0,sy-10,W,20);
 }
 
+
+function drawHoverLabel(ctx,W,H){
+  if(hov!==twHov){twHov=hov;twLen=0;twT=0;}
+  if(!hov)return;
+  twT+=.016;
+  twLen=Math.min(TW_LABEL.length,Math.floor(twT*22));
+  const shown=TW_LABEL.slice(0,twLen);
+  const cursorOn=Math.floor(hudT*2)%2===0;
+  const line=shown+(cursorOn?'█':'');
+  const sz=130,mg=16;
+  const lx=W-mg;
+  const ly=H-sz-mg-10;
+  ctx.save();
+  ctx.font='bold 11px "Courier New"';
+  ctx.textAlign='right';
+  ctx.fillStyle=G;
+  ctx.shadowColor=G;ctx.shadowBlur=8;
+  ctx.fillText(line,lx,ly);
+  ctx.restore();
+}
+
 function updateHUD(){
   hudT+=.016;
   if(++sensorTick%15===0){
@@ -629,6 +653,7 @@ function updateHUD(){
   hCtx.clearRect(0,0,W,H);
   drawCrosshair(hCtx,W,H);
   drawAttitude(hCtx,W,H);
+  drawHoverLabel(hCtx,W,H);
 }
 
 // ═══ Animation Loop ════════════════════════════════════
@@ -652,7 +677,10 @@ function animate(){
     const dp=Math.atan2(hov.cy-PLAYER_H,Math.sqrt((hov.cx-pPos.x)**2+(hov.cz-pPos.z)**2))-tPitch;
     tYaw+=dy*SNAP_STR;tPitch+=dp*SNAP_STR;
   }
-  POSTERS.forEach(p=>{const t=p===hov?1:0;const c=p.mat.color;c.r=lerp(c.r,1+t*.1,.15);c.g=lerp(c.g,1+t*.45,.15);c.b=lerp(c.b,1+t*.1,.15);});
+  POSTERS.forEach(p=>{
+    const t=p===hov?1:0;
+    const fc=p.frMat.color;fc.r=lerp(fc.r,t?.224:1,.12);fc.g=lerp(fc.g,1,.12);fc.b=lerp(fc.b,t?.078:1,.12);
+  });
   // Movement — build target velocity then lerp current vel toward it
   fwd.set(-Math.sin(cYaw),0,-Math.cos(cYaw));right.set(Math.cos(cYaw),0,-Math.sin(cYaw));
   mv.set(0,0,0);
