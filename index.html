@@ -328,42 +328,47 @@ async function enableGyro(){
     try{const r=await DeviceOrientationEvent.requestPermission();if(r!=='granted'){gyroBtn.textContent='Gyro: DENIED';return false;}}
     catch(err){gyroBtn.textContent='Gyro: ERR';return false;}
   }
-  gyroEnabled=true;gyroLast=null;
+  gyroEnabled=true;resetGyro();
   gyroBtn.textContent='Gyro: ON';gyroBtn.classList.add('on');
   return true;
 }
 function disableGyro(){
-  gyroEnabled=false;gyroLast=null;
+  gyroEnabled=false;resetGyro();
   gyroBtn.textContent='Gyro: OFF';gyroBtn.classList.remove('on');
 }
 gyroBtn.addEventListener('click',()=>{gyroEnabled?disableGyro():enableGyro();});
-// Incremental gyro tracking — maps device-tilt deltas to camera deltas
-// Picks the right axis based on screen orientation (portrait vs landscape)
-const GYRO_YAW_SENS=0.55,GYRO_PITCH_SENS=1.6;
-let gyroLast=null;
+// Quaternion-based gyro mapping — robust to gimbal lock when phone is held vertically.
+// Builds the device's world quaternion from alpha/beta/gamma + screen orientation
+// (same algorithm as THREE.DeviceOrientationControls), then extracts yaw/pitch in YXZ
+// to match the camera. Damping pipeline (lerp cYaw -> tYaw) still smooths the result.
+const _gZ=new THREE.Vector3(0,0,1);
+const _gQframe=new THREE.Quaternion(-Math.sqrt(.5),0,0,Math.sqrt(.5)); // -PI/2 around X
+const _gQ=new THREE.Quaternion();
+const _gQscr=new THREE.Quaternion();
+const _gE=new THREE.Euler(0,0,0,'YXZ');
+let yawOffset=null,prevYaw=null;
+function resetGyro(){yawOffset=null;prevYaw=null;}
+window.addEventListener('orientationchange',resetGyro);
 window.addEventListener('deviceorientation',e=>{
   if(!gyroEnabled||fsOpen)return;
-  if(e.alpha===null||e.beta===null||e.gamma===null){return;}
-  if(gyroLast===null){gyroLast={a:e.alpha,b:e.beta,g:e.gamma};return;}
-  // Wrap-aware deltas
-  const wrap=(d)=>d>180?d-360:(d<-180?d+360:d);
-  const da=wrap(e.alpha-gyroLast.a);
-  const db=wrap(e.beta-gyroLast.b);
-  const dg=wrap(e.gamma-gyroLast.g);
-  gyroLast.a=e.alpha;gyroLast.b=e.beta;gyroLast.g=e.gamma;
-  // Pick axes by screen orientation
-  const angle=(screen.orientation&&screen.orientation.angle)||window.orientation||0;
-  let yawDeg,pitchDeg;
-  if(angle===90){yawDeg=da;pitchDeg=-dg;}
-  else if(angle===-90||angle===270){yawDeg=da;pitchDeg=dg;}
-  else{yawDeg=da;pitchDeg=db;}
-  tYaw-=yawDeg*Math.PI/180*GYRO_YAW_SENS;
-  tPitch+=pitchDeg*Math.PI/180*GYRO_PITCH_SENS;
-  tPitch=Math.max(-MAX_P,Math.min(MAX_P,tPitch));
+  if(e.alpha===null||e.beta===null||e.gamma===null)return;
+  const a=e.alpha*Math.PI/180,b=e.beta*Math.PI/180,g=e.gamma*Math.PI/180;
+  const orient=-(((screen.orientation&&screen.orientation.angle)||window.orientation||0))*Math.PI/180;
+  _gE.set(b,a,-g,'YXZ');
+  _gQ.setFromEuler(_gE);
+  _gQ.multiply(_gQframe);
+  _gQ.multiply(_gQscr.setFromAxisAngle(_gZ,orient));
+  _gE.setFromQuaternion(_gQ,'YXZ');
+  if(yawOffset===null){yawOffset=_gE.y;prevYaw=0;tYaw=0;tPitch=Math.max(-MAX_P,Math.min(MAX_P,_gE.x));return;}
+  let yaw=_gE.y-yawOffset;
+  // Accumulate deltas so spinning past forward doesn't cause a -π/π jump
+  let dy=yaw-prevYaw;
+  while(dy>Math.PI)dy-=Math.PI*2;
+  while(dy<-Math.PI)dy+=Math.PI*2;
+  tYaw+=dy;
+  prevYaw=yaw;
+  tPitch=Math.max(-MAX_P,Math.min(MAX_P,_gE.x));
 });
-// Reset incremental tracking when toggled or rotated
-function resetGyro(){gyroLast=null;}
-window.addEventListener('orientationchange',resetGyro);
 
 // ═══ Player State ══════════════════════════════════════
 const pPos=new THREE.Vector3(0,PLAYER_H,3);
