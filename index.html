@@ -640,7 +640,7 @@ function animate(){
     const tp=new THREE.Vector3(p.cx-pPos.x,p.cy-pPos.y,p.cz-pPos.z).normalize();
     if(cDir.dot(tp)>best&&cDir.dot(p.fd)<0){best=cDir.dot(tp);hov=p;}
   });
-  if(hov){
+  if(hov&&!gyroEnabled){
     const tp=new THREE.Vector3(hov.cx-pPos.x,0,hov.cz-pPos.z).normalize();
     let dy=Math.atan2(-tp.x,-tp.z)-tYaw;
     while(dy>Math.PI)dy-=Math.PI*2;while(dy<-Math.PI)dy+=Math.PI*2;
