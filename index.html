@@ -2,10 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>LOFT — FPV</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#000;overflow:hidden}
+body{background:#000;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;overscroll-behavior:none}
 canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh}
 #hud{z-index:2;pointer-events:none}
 #c3{z-index:1}
@@ -31,7 +32,7 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh}
 <body>
 <div id="overlay">
   <h1>LOFT — 01</h1>
-  <p>Click to enter · WASD · Mouse</p>
+  <p id="ovHint">Click to enter · WASD · Mouse</p>
 </div>
 <canvas id="c3"></canvas>
 <canvas id="hud"></canvas>
@@ -216,6 +217,13 @@ let tYaw=0,tPitch=0,cYaw=0,cPitch=0;
 const MAX_P=Math.PI*.42;
 // Yaw/pitch radians per full screen-width/height of pointer travel (DPI-independent)
 const YAW_PER_W=Math.PI*2.0,PITCH_PER_H=Math.PI*1.2;
+// Chrome/Edge/Opera report pointer-lock movementX/Y in device pixels on HiDPI displays;
+// Safari and Firefox report CSS pixels. Normalize Chromium browsers down by devicePixelRatio
+// so the same physical drag produces the same yaw/pitch in every browser.
+const _ua=navigator.userAgent;
+const IS_SAFARI=/Safari/.test(_ua)&&!/Chrome|Chromium|CriOS|Android/.test(_ua);
+const IS_FIREFOX=/Firefox/.test(_ua);
+const PTR_DPR=(IS_SAFARI||IS_FIREFOX)?1:(window.devicePixelRatio||1);
 let locked=false,fsOpen=false,hov=null;
 const fsView=document.getElementById('fsView');
 const fsBg=document.getElementById('fsBg');
@@ -240,8 +248,10 @@ fsView.addEventListener('click',closeFullscreen);
 const isTouch='ontouchstart' in window||navigator.maxTouchPoints>0;
 ovEl.addEventListener('click',()=>{
   if(fsOpen)return;
-  if(isTouch){ovEl.style.display='none';locked=true;}
-  else c3.requestPointerLock();
+  if(isTouch){
+    ovEl.style.display='none';locked=true;
+    enableGyro();
+  } else c3.requestPointerLock();
 });
 c3.addEventListener('click',()=>{if(locked&&hov)openFullscreen(hov);});
 document.addEventListener('pointerlockchange',()=>{
@@ -250,7 +260,7 @@ document.addEventListener('pointerlockchange',()=>{
 });
 document.addEventListener('mousemove',e=>{
   if(!locked||fsOpen)return;
-  tYaw-=(e.movementX/window.innerWidth)*YAW_PER_W;tPitch-=(e.movementY/window.innerHeight)*PITCH_PER_H;
+  tYaw-=(e.movementX/PTR_DPR/window.innerWidth)*YAW_PER_W;tPitch-=(e.movementY/PTR_DPR/window.innerHeight)*PITCH_PER_H;
   tPitch=Math.max(-MAX_P,Math.min(MAX_P,tPitch));
 });
 document.addEventListener('keydown',e=>{
@@ -267,8 +277,12 @@ const knob=document.getElementById('joyKnob');
 const gyroBtn=document.getElementById('gyroBtn');
 const joyVec={x:0,y:0};
 let joyId=-1,lookId=-1,lookLastX=0,lookLastY=0;
-let gyroEnabled=false,gyroQ0=null;
-if(isTouch)mobileUI.classList.add('show');
+let gyroEnabled=false;
+if(isTouch){
+  mobileUI.classList.add('show');
+  const oh=document.getElementById('ovHint');if(oh)oh.textContent='Tap to enter · Tilt to look · Joystick to walk';
+  gyroBtn.textContent='Gyro: AUTO';
+}
 function joyUpdate(t){
   const r=joy.getBoundingClientRect();
   const cx=r.left+r.width/2,cy=r.top+r.height/2;
@@ -308,28 +322,48 @@ c3.addEventListener('touchmove',e=>{
 c3.addEventListener('touchend',e=>{for(const t of e.changedTouches)if(t.identifier===lookId)lookId=-1;},{passive:true});
 c3.addEventListener('touchcancel',()=>{lookId=-1;},{passive:true});
 // Gyroscope / device orientation
-gyroBtn.addEventListener('click',async()=>{
-  if(!gyroEnabled){
-    if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
-      try{const r=await DeviceOrientationEvent.requestPermission();if(r!=='granted'){gyroBtn.textContent='Gyro: DENIED';return;}}
-      catch(err){gyroBtn.textContent='Gyro: ERR';return;}
-    }
-    gyroEnabled=true;gyroQ0=null;
-    gyroBtn.textContent='Gyro: ON';gyroBtn.classList.add('on');
-  }else{
-    gyroEnabled=false;
-    gyroBtn.textContent='Gyro: OFF';gyroBtn.classList.remove('on');
+async function enableGyro(){
+  if(gyroEnabled)return true;
+  if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
+    try{const r=await DeviceOrientationEvent.requestPermission();if(r!=='granted'){gyroBtn.textContent='Gyro: DENIED';return false;}}
+    catch(err){gyroBtn.textContent='Gyro: ERR';return false;}
   }
-});
+  gyroEnabled=true;gyroLast=null;
+  gyroBtn.textContent='Gyro: ON';gyroBtn.classList.add('on');
+  return true;
+}
+function disableGyro(){
+  gyroEnabled=false;gyroLast=null;
+  gyroBtn.textContent='Gyro: OFF';gyroBtn.classList.remove('on');
+}
+gyroBtn.addEventListener('click',()=>{gyroEnabled?disableGyro():enableGyro();});
+// Incremental gyro tracking — maps device-tilt deltas to camera deltas
+// Picks the right axis based on screen orientation (portrait vs landscape)
+const GYRO_YAW_SENS=0.55,GYRO_PITCH_SENS=1.6;
+let gyroLast=null;
 window.addEventListener('deviceorientation',e=>{
   if(!gyroEnabled||fsOpen)return;
-  if(e.alpha===null||e.beta===null)return;
-  if(gyroQ0===null){gyroQ0={a:e.alpha,b:e.beta};return;}
-  const da=(e.alpha-gyroQ0.a)*Math.PI/180;
-  const db=(e.beta-gyroQ0.b)*Math.PI/180;
-  tYaw=-da;
-  tPitch=Math.max(-MAX_P,Math.min(MAX_P,db));
+  if(e.alpha===null||e.beta===null||e.gamma===null){return;}
+  if(gyroLast===null){gyroLast={a:e.alpha,b:e.beta,g:e.gamma};return;}
+  // Wrap-aware deltas
+  const wrap=(d)=>d>180?d-360:(d<-180?d+360:d);
+  const da=wrap(e.alpha-gyroLast.a);
+  const db=wrap(e.beta-gyroLast.b);
+  const dg=wrap(e.gamma-gyroLast.g);
+  gyroLast.a=e.alpha;gyroLast.b=e.beta;gyroLast.g=e.gamma;
+  // Pick axes by screen orientation
+  const angle=(screen.orientation&&screen.orientation.angle)||window.orientation||0;
+  let yawDeg,pitchDeg;
+  if(angle===90){yawDeg=da;pitchDeg=-dg;}
+  else if(angle===-90||angle===270){yawDeg=da;pitchDeg=dg;}
+  else{yawDeg=da;pitchDeg=db;}
+  tYaw-=yawDeg*Math.PI/180*GYRO_YAW_SENS;
+  tPitch+=pitchDeg*Math.PI/180*GYRO_PITCH_SENS;
+  tPitch=Math.max(-MAX_P,Math.min(MAX_P,tPitch));
 });
+// Reset incremental tracking when toggled or rotated
+function resetGyro(){gyroLast=null;}
+window.addEventListener('orientationchange',resetGyro);
 
 // ═══ Player State ══════════════════════════════════════
 const pPos=new THREE.Vector3(0,PLAYER_H,3);
@@ -510,7 +544,7 @@ function drawHorizon(ctx,W,H,hdg){
 }
 
 function drawAttitude(ctx,W,H){
-  const sz=130,mg=16,x=mg,y=H-sz-mg;
+  const sz=130,mg=16,x=W-sz-mg,y=H-sz-mg;
   ctx.fillStyle='rgba(0,8,0,.7)';ctx.fillRect(x,y,sz,sz);
   ctx.strokeStyle=G;ctx.lineWidth=1.5;ctx.strokeRect(x,y,sz,sz);
   const cx2=x+sz/2,cy2=y+sz/2;
